@@ -6,6 +6,8 @@ import ScatterJS from 'scatterjs-core';
 import ScatterEOS from 'scatterjs-plugin-eosjs';
 import ScatterLynx from 'scatterjs-plugin-lynx';
 import Eos from 'eosjs';
+import { Link, LinkSession } from 'anchor-link';
+import BrowserTransport from 'anchor-link-browser-transport'
 
 import * as waxjs from "@waxio/waxjs/dist";
 
@@ -35,6 +37,8 @@ export class LoginEOSService {
   });
   eos: any          = Eos(this.eosConf);
   waxRPC: any       = Eos(this.eosConf);
+  anchorLink: any = Link;
+  anchorLinkSession: any = LocalSessionStorage;
   ScatterJS: any = ScatterJS;
   loggedIn: any  = new EventEmitter<boolean>();
   accountName: any;
@@ -223,6 +227,45 @@ export class LoginEOSService {
   }
 
 
+  async initAnchorLink() {
+    // establish anchor-link instance
+    this.anchorLink = new Link({
+      chainId: this.config.chain,
+      rpc: `${this.network.protocol}://${this.network.host}:${this.network.port}`,
+      transport: new BrowserTransport()
+    })
+    // establish persistence
+    this.anchorLinkSession = new LocalSessionStorage();
+    // attempt to restore any prior sessions
+    let session = this.anchorLinkSession.restore(
+      this.anchorLink,
+      this.config.chain
+    );
+    this.eosioWalletType = 'anchorLink';
+    if (session) {
+      // if prior session found, establish various components to use it
+      this.accountName = session.auth.actor;
+      this.options = {authorization:[`${session.auth.actor}@${session.auth.permission}`]};
+      this.loggedIn.emit(true);
+      this.connected = true;
+    } else {
+      // otherwise establish new session
+      let identity = await this.anchorLink.login("eos-uml")
+      this.accountName = identity.signer.actor;
+      this.options = {authorization:[`${identity.signer.actor}@${identity.signer.permission}`]};
+      // set appropriate localstorage values for uml
+      localStorage.setItem('walletConnected', 'connected');
+      localStorage.setItem('eosioWalletType', this.eosioWalletType);
+      // save this session for future use
+      this.anchorLinkSession.store(identity.session, this.config.chain);
+      this.loggedIn.emit(true);
+      this.connected = true;
+      // set tge current session to that of the identity
+      session = identity.session;
+      this.closePopUp();
+      this.showMessage(`Hi ${this.accountName} :)`);
+    }
+  }
 
   /*initLedger() {
        this.signatureProvider.getAvailableKeys()
@@ -345,13 +388,51 @@ export class LoginEOSService {
     }  else if (this.eosioWalletType === 'wax'){
           localStorage.setItem('walletConnected', 'disconnect');
           location.reload();
+    } else if (this.eosioWalletType === 'anchorLink') {
+      localStorage.setItem('walletConnected', 'disconnect');
+      this.anchorLinkSession.remove(this.config.chain)
+      location.reload();
     }
   }
 
 // ==== service end
 }
 
+interface SessionStorage {
+  store(session: LinkSession, id: string, accountName?: string): Promise<void>;
+  restore(
+    link: Link,
+    id: string,
+    accountName?: string
+  ): LinkSession | null;
+  remove(id: string, accountName?: string): Promise<void>;
+}
 
+class LocalSessionStorage implements SessionStorage {
+  constructor(readonly keyPrefix: string = 'anchorlink') {}
 
+  private sessionKey(id: string, accountName?: string) {
+    return [this.keyPrefix, id, accountName]
+      .filter(v => typeof v === 'string' && v.length > 0)
+      .join('-');
+  }
 
+  async store(session: LinkSession, id: string, accountName?: string) {
+    const key = this.sessionKey(id, accountName);
+    const data = session.serialize();
+    localStorage.setItem(key, JSON.stringify(data));
+  }
 
+  restore(link: Link, id: string, accountName?: string) {
+    const key = this.sessionKey(id, accountName);
+    const data = JSON.parse(localStorage.getItem(key) || 'null');
+    if (data) {
+      return LinkSession.restore(link, data);
+    }
+    return null;
+  }
+
+  async remove(id: string, accountName?: string) {
+    localStorage.removeItem(this.sessionKey(id, accountName));
+  }
+}

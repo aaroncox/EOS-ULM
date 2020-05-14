@@ -34,7 +34,9 @@ export class LoginEOSComponent implements OnInit {
 			  this.loginEOSService.initEostock();
 	  	  } else if (this.loginEOSService.eosioWalletType === 'wax'){
 			  this.loginEOSService.initWAX();
-	  	  }
+        } else if (this.loginEOSService.eosioWalletType === 'anchorLink'){
+        this.loginEOSService.initAnchorLink();
+        }
       }
 	}
 }
